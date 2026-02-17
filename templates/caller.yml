@@ -1,0 +1,24 @@
+# Copy this file to your repo as .github/workflows/deploy.yml
+# Then configure the app_name and any other inputs below.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, closed]
+
+jobs:
+  deploy:
+    uses: MeghdadHadidi/deploy-workflows/.github/workflows/deploy.yml@main
+    with:
+      app_name: myapp          # REQUIRED: your subdomain (e.g. mocket → mocket.meghd.space)
+      # app_port: '3000'       # Container port (default: 80)
+      # dockerfile_path: './Dockerfile'
+      # spa_mode: true         # Set false for API servers
+      # docker_build_args: |
+      #   NODE_ENV=production
+      #   NEXT_PUBLIC_API_URL=https://api.example.com
+      # docker_run_args: '--memory 512m'
+    secrets: inherit
