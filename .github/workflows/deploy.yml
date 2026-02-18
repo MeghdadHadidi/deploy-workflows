@@ -136,6 +136,12 @@ jobs:
           echo "  Domain: https://${FULL_DOMAIN}"
           echo "══════════════════════════════════════════"
 
+          # ── Copy .env into build context if present ──────────
+          if [ -f "/opt/deploys/${APP_NAME}/.env" ]; then
+            cp "/opt/deploys/${APP_NAME}/.env" "$BUILD_DIR/.env"
+            echo "→ Copied .env into build context"
+          fi
+
           # ── Build Docker image ─────────────────────────────────
           cd "$BUILD_DIR"
 
