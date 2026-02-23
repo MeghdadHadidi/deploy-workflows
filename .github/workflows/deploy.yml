@@ -37,6 +37,11 @@ on:
         type: boolean
         default: true
         description: 'Enable SPA mode (try_files fallback to /index.html for client-side routing)'
+      skip_release:
+        required: false
+        type: boolean
+        default: false
+        description: 'Skip auto-release step (useful for dev/preview deploys)'
     secrets:
       DEPLOY_SSH_KEY:
         required: true
@@ -335,7 +340,7 @@ jobs:
   # Auto-tag and Release (push to main only)
   # ──────────────────────────────────────────────
   release:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && inputs.skip_release != true
     needs: deploy
     runs-on: ubuntu-latest
     permissions:
