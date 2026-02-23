@@ -42,6 +42,11 @@ on:
         type: boolean
         default: false
         description: 'Skip auto-release step (useful for dev/preview deploys)'
+      environment:
+        required: false
+        type: string
+        default: 'production'
+        description: 'Deployment environment: production (default) or dev. Affects subdomain pattern.'
     secrets:
       DEPLOY_SSH_KEY:
         required: true
@@ -55,7 +60,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: deploy-${{ inputs.app_name }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'production' }}
+  group: deploy-${{ inputs.app_name }}-${{ inputs.environment }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'main' }}
   cancel-in-progress: true
 
 env:
@@ -88,18 +93,35 @@ jobs:
         run: |
           APP="${{ inputs.app_name }}"
           DOMAIN="${{ inputs.domain }}"
+          ENV="${{ inputs.environment }}"
 
           if [ "${{ github.event_name }}" = "push" ]; then
-            echo "environment=production" >> $GITHUB_OUTPUT
-            echo "container_name=${APP}" >> $GITHUB_OUTPUT
-            echo "subdomain=${APP}" >> $GITHUB_OUTPUT
-            echo "url=https://${APP}.${DOMAIN}" >> $GITHUB_OUTPUT
+            # Push deployment (production or dev)
+            if [ "$ENV" = "dev" ]; then
+              echo "environment=dev" >> $GITHUB_OUTPUT
+              echo "container_name=${APP}-dev" >> $GITHUB_OUTPUT
+              echo "subdomain=dev.${APP}" >> $GITHUB_OUTPUT
+              echo "url=https://dev.${APP}.${DOMAIN}" >> $GITHUB_OUTPUT
+            else
+              echo "environment=production" >> $GITHUB_OUTPUT
+              echo "container_name=${APP}" >> $GITHUB_OUTPUT
+              echo "subdomain=${APP}" >> $GITHUB_OUTPUT
+              echo "url=https://${APP}.${DOMAIN}" >> $GITHUB_OUTPUT
+            fi
           else
+            # PR preview deployment
             PR=${{ github.event.pull_request.number }}
-            echo "environment=preview" >> $GITHUB_OUTPUT
-            echo "container_name=${APP}-pr-${PR}" >> $GITHUB_OUTPUT
-            echo "subdomain=${APP}-pr-${PR}" >> $GITHUB_OUTPUT
-            echo "url=https://${APP}-pr-${PR}.${DOMAIN}" >> $GITHUB_OUTPUT
+            if [ "$ENV" = "dev" ]; then
+              echo "environment=dev-preview" >> $GITHUB_OUTPUT
+              echo "container_name=${APP}-dev-pr-${PR}" >> $GITHUB_OUTPUT
+              echo "subdomain=pr-${PR}-dev.${APP}" >> $GITHUB_OUTPUT
+              echo "url=https://pr-${PR}-dev.${APP}.${DOMAIN}" >> $GITHUB_OUTPUT
+            else
+              echo "environment=preview" >> $GITHUB_OUTPUT
+              echo "container_name=${APP}-pr-${PR}" >> $GITHUB_OUTPUT
+              echo "subdomain=pr-${PR}.${APP}" >> $GITHUB_OUTPUT
+              echo "url=https://pr-${PR}.${APP}.${DOMAIN}" >> $GITHUB_OUTPUT
+            fi
           fi
 
       - name: Copy source to server
@@ -280,7 +302,15 @@ jobs:
 
       - name: Remove preview container
         run: |
-          CONTAINER="${{ inputs.app_name }}-pr-${{ github.event.pull_request.number }}"
+          ENV="${{ inputs.environment }}"
+          PR="${{ github.event.pull_request.number }}"
+          APP="${{ inputs.app_name }}"
+
+          if [ "$ENV" = "dev" ]; then
+            CONTAINER="${APP}-dev-pr-${PR}"
+          else
+            CONTAINER="${APP}-pr-${PR}"
+          fi
           echo "Cleaning up ${CONTAINER}..."
 
           ${{ env.SSH_CMD }} root@${{ secrets.DEPLOY_HOST }} << CLEANUP_SCRIPT
