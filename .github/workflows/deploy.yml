@@ -44,10 +44,6 @@ on:
       DEPLOY_HOST:
         required: true
 
-permissions:
-  contents: write
-  pull-requests: write
-
 concurrency:
   group: deploy-${{ inputs.app_name }}-${{ inputs.environment }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'main' }}
   cancel-in-progress: true
@@ -79,4 +75,3 @@ jobs:
       - name: Show environment
         run: |
           echo "Will deploy ${{ inputs.app_name }} to ${{ inputs.environment }} on ${{ secrets.DEPLOY_HOST }}"
-          echo "Dockerfile: ${{ inputs.dockerfile_path }}"
