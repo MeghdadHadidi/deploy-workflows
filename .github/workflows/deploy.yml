@@ -6,54 +6,43 @@ on:
       app_name:
         required: true
         type: string
-        description: 'Application name (used as subdomain and container prefix)'
       app_port:
         required: false
         type: string
         default: '80'
-        description: 'Container internal port (the port your app listens on inside the container)'
       domain:
         required: false
         type: string
         default: 'meghd.space'
-        description: 'Base domain for deployment'
       dockerfile_path:
         required: false
         type: string
         default: './Dockerfile'
-        description: 'Path to Dockerfile relative to repo root'
       docker_build_args:
         required: false
         type: string
         default: ''
-        description: 'Docker build arguments (newline-separated KEY=VALUE pairs)'
       docker_run_args:
         required: false
         type: string
         default: ''
-        description: 'Extra docker run flags (e.g. --memory 512m)'
       spa_mode:
         required: false
         type: boolean
         default: true
-        description: 'Enable SPA mode (try_files fallback to /index.html for client-side routing)'
       skip_release:
         required: false
         type: boolean
         default: false
-        description: 'Skip auto-release step (useful for dev/preview deploys)'
       environment:
         required: false
         type: string
         default: 'production'
-        description: 'Deployment environment: production (default) or dev. Affects subdomain pattern.'
     secrets:
       DEPLOY_SSH_KEY:
         required: true
-        description: 'SSH private key for the app server'
       DEPLOY_HOST:
         required: true
-        description: 'App server hostname or IP'
 
 permissions:
   contents: write
@@ -67,19 +56,17 @@ env:
   SSH_CMD: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no
 
 jobs:
-  # ──────────────────────────────────────────────
-  # Deploy (push to main OR PR opened/synchronized)
-  # ──────────────────────────────────────────────
   deploy:
-    if: >-
-      github.event_name == 'push' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.action != 'closed')
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.action != 'closed')
     runs-on: ubuntu-latest
-    outputs:
-      url: ${{ steps.target.outputs.url }}
-      container: ${{ steps.target.outputs.container_name }}
     steps:
+      - name: Debug context
+        run: |
+          echo "Event: ${{ github.event_name }}"
+          echo "App: ${{ inputs.app_name }}"
+          echo "Environment: ${{ inputs.environment }}"
+          echo "PR number: ${{ github.event.pull_request.number || 'N/A' }}"
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -89,308 +76,7 @@ jobs:
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Determine deployment target
-        id: target
+      - name: Show environment
         run: |
-          APP="${{ inputs.app_name }}"
-          DOMAIN="${{ inputs.domain }}"
-          ENV="${{ inputs.environment }}"
-
-          if [ "${{ github.event_name }}" = "push" ]; then
-            # Push deployment (production or dev)
-            if [ "$ENV" = "dev" ]; then
-              echo "environment=dev" >> $GITHUB_OUTPUT
-              echo "container_name=${APP}-dev" >> $GITHUB_OUTPUT
-              echo "subdomain=dev.${APP}" >> $GITHUB_OUTPUT
-              echo "url=https://dev.${APP}.${DOMAIN}" >> $GITHUB_OUTPUT
-            else
-              echo "environment=production" >> $GITHUB_OUTPUT
-              echo "container_name=${APP}" >> $GITHUB_OUTPUT
-              echo "subdomain=${APP}" >> $GITHUB_OUTPUT
-              echo "url=https://${APP}.${DOMAIN}" >> $GITHUB_OUTPUT
-            fi
-          else
-            # PR preview deployment
-            PR=${{ github.event.pull_request.number }}
-            if [ "$ENV" = "dev" ]; then
-              echo "environment=dev-preview" >> $GITHUB_OUTPUT
-              echo "container_name=${APP}-dev-pr-${PR}" >> $GITHUB_OUTPUT
-              echo "subdomain=pr-${PR}-dev.${APP}" >> $GITHUB_OUTPUT
-              echo "url=https://pr-${PR}-dev.${APP}.${DOMAIN}" >> $GITHUB_OUTPUT
-            else
-              echo "environment=preview" >> $GITHUB_OUTPUT
-              echo "container_name=${APP}-pr-${PR}" >> $GITHUB_OUTPUT
-              echo "subdomain=pr-${PR}.${APP}" >> $GITHUB_OUTPUT
-              echo "url=https://pr-${PR}.${APP}.${DOMAIN}" >> $GITHUB_OUTPUT
-            fi
-          fi
-
-      - name: Copy source to server
-        run: |
-          DEPLOY_DIR="/opt/deploys/${{ inputs.app_name }}/src"
-          tar czf - \
-            --exclude='.git' \
-            --exclude='node_modules' \
-            --exclude='.next' \
-            --exclude='.turbo' \
-            . | \
-          ${{ env.SSH_CMD }} root@${{ secrets.DEPLOY_HOST }} \
-            "rm -rf ${DEPLOY_DIR} && mkdir -p ${DEPLOY_DIR} && tar xzf - -C ${DEPLOY_DIR}"
-
-      - name: Build and deploy
-        run: |
-          ${{ env.SSH_CMD }} root@${{ secrets.DEPLOY_HOST }} << 'DEPLOY_SCRIPT'
-          set -e
-
-          # ── Variables (GHA-expanded at YAML level) ─────────────
-          APP_NAME="${{ inputs.app_name }}"
-          APP_PORT="${{ inputs.app_port }}"
-          CONTAINER="${{ steps.target.outputs.container_name }}"
-          SUBDOMAIN="${{ steps.target.outputs.subdomain }}"
-          DOMAIN="${{ inputs.domain }}"
-          SHA="${{ github.sha }}"
-          DOCKERFILE="${{ inputs.dockerfile_path }}"
-          BUILD_ARGS_RAW="${{ inputs.docker_build_args }}"
-          RUN_ARGS="${{ inputs.docker_run_args }}"
-          SPA_MODE="${{ inputs.spa_mode }}"
-
-          IMAGE_TAG="${APP_NAME}:${SHA:0:12}"
-          FULL_DOMAIN="${SUBDOMAIN}.${DOMAIN}"
-          BUILD_DIR="/opt/deploys/${APP_NAME}/src"
-
-          echo "══════════════════════════════════════════"
-          echo "  Deploying ${CONTAINER}"
-          echo "  Image:  ${IMAGE_TAG}"
-          echo "  Domain: https://${FULL_DOMAIN}"
-          echo "══════════════════════════════════════════"
-
-          # ── Copy .env into build context if present ──────────
-          if [ -f "/opt/deploys/${APP_NAME}/.env" ]; then
-            cp "/opt/deploys/${APP_NAME}/.env" "$BUILD_DIR/.env"
-            echo "→ Copied .env into build context"
-          fi
-
-          # ── Build Docker image ─────────────────────────────────
-          cd "$BUILD_DIR"
-
-          BUILD_FLAGS=""
-          if [ -n "$BUILD_ARGS_RAW" ]; then
-            while IFS= read -r arg; do
-              [ -n "$arg" ] && BUILD_FLAGS="$BUILD_FLAGS --build-arg $arg"
-            done <<< "$BUILD_ARGS_RAW"
-          fi
-
-          echo "→ Building image..."
-          docker build $BUILD_FLAGS -t "$IMAGE_TAG" -f "$DOCKERFILE" .
-
-          # ── Stop old container ─────────────────────────────────
-          if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
-            echo "→ Stopping old container..."
-            docker stop "$CONTAINER" 2>/dev/null || true
-            docker rm "$CONTAINER" 2>/dev/null || true
-          fi
-
-          # ── Prepare Caddy labels ───────────────────────────────
-          LABELS=(
-            -l "caddy_0=https://${FULL_DOMAIN}"
-            -l "caddy_0.encode=zstd gzip"
-            -l "caddy_0.handle_path=/*"
-            -l "caddy_0.handle_path.0_reverse_proxy={{upstreams ${APP_PORT}}}"
-            -l "caddy_0.header=-Server"
-            -l "caddy_ingress_network=coolify"
-          )
-
-          if [ "$SPA_MODE" = "true" ]; then
-            LABELS+=(-l "caddy_0.try_files={path} /index.html")
-          fi
-
-          # ── Load env file if present ───────────────────────────
-          ENV_FLAG=""
-          if [ -f "/opt/deploys/${APP_NAME}/.env" ]; then
-            echo "→ Found .env file, loading..."
-            ENV_FLAG="--env-file /opt/deploys/${APP_NAME}/.env"
-          fi
-
-          # ── Run new container ──────────────────────────────────
-          echo "→ Starting container..."
-          docker run -d \
-            --name "$CONTAINER" \
-            --network coolify \
-            --restart unless-stopped \
-            "${LABELS[@]}" \
-            $ENV_FLAG \
-            $RUN_ARGS \
-            "$IMAGE_TAG"
-
-          # ── Verify ─────────────────────────────────────────────
-          sleep 5
-          if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
-            echo "✅ Container ${CONTAINER} is running"
-          else
-            echo "❌ Container ${CONTAINER} failed to start"
-            echo "── Logs ──"
-            docker logs "$CONTAINER" 2>&1 | tail -30
-            exit 1
-          fi
-
-          # ── Cleanup old images (keep last 3) ───────────────────
-          docker images "$APP_NAME" --format "{{.Repository}}:{{.Tag}} {{.ID}} {{.CreatedAt}}" | \
-            sort -t' ' -k3 -r | tail -n +4 | awk '{print $2}' | \
-            xargs -r docker rmi 2>/dev/null || true
-
-          echo "✅ Deployed to https://${FULL_DOMAIN}"
-          DEPLOY_SCRIPT
-
-      - name: Comment on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const marker = '<!-- deploy-bot -->';
-            const url = '${{ steps.target.outputs.url }}';
-            const env = '${{ steps.target.outputs.container_name }}';
-            const sha = context.sha.substring(0, 12);
-
-            const body = [
-              marker,
-              `### Deploy Preview`,
-              '',
-              `| | |`,
-              `|---|---|`,
-              `| **URL** | ${url} |`,
-              `| **Container** | \`${env}\` |`,
-              `| **Commit** | \`${sha}\` |`,
-              '',
-              `> This preview will be removed when the PR is closed.`,
-            ].join('\n');
-
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-
-            const existing = comments.find(c => c.body.includes(marker));
-
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
-
-  # ──────────────────────────────────────────────
-  # Cleanup (PR closed)
-  # ──────────────────────────────────────────────
-  cleanup:
-    if: github.event_name == 'pull_request' && github.event.action == 'closed'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Setup SSH
-        run: |
-          install -m 600 -D /dev/null ~/.ssh/deploy_key
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
-
-      - name: Remove preview container
-        run: |
-          ENV="${{ inputs.environment }}"
-          PR="${{ github.event.pull_request.number }}"
-          APP="${{ inputs.app_name }}"
-
-          if [ "$ENV" = "dev" ]; then
-            CONTAINER="${APP}-dev-pr-${PR}"
-          else
-            CONTAINER="${APP}-pr-${PR}"
-          fi
-          echo "Cleaning up ${CONTAINER}..."
-
-          ${{ env.SSH_CMD }} root@${{ secrets.DEPLOY_HOST }} << CLEANUP_SCRIPT
-          set -e
-          CONTAINER="${CONTAINER}"
-
-          if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER}\$"; then
-            docker stop "${CONTAINER}" 2>/dev/null || true
-            docker rm "${CONTAINER}" 2>/dev/null || true
-            echo "✅ Removed container ${CONTAINER}"
-          else
-            echo "Container ${CONTAINER} not found (already removed)"
-          fi
-
-          # Remove the image if it exists
-          docker images --format '{{.Repository}}:{{.Tag}}' | \
-            grep "^${{ inputs.app_name }}:" | \
-            grep "pr-${{ github.event.pull_request.number }}" | \
-            xargs -r docker rmi 2>/dev/null || true
-          CLEANUP_SCRIPT
-
-      - name: Comment on PR
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const marker = '<!-- deploy-bot -->';
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-            const existing = comments.find(c => c.body.includes(marker));
-            const body = [
-              marker,
-              `### Deploy Preview`,
-              '',
-              `Preview deployment has been removed.`,
-            ].join('\n');
-
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
-
-  # ──────────────────────────────────────────────
-  # Auto-tag and Release (push to main only)
-  # ──────────────────────────────────────────────
-  release:
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && inputs.skip_release != true
-    needs: deploy
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Bump version and create release
-        run: |
-          LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          MAJOR=$(echo "$LATEST" | cut -d. -f1)
-          MINOR=$(echo "$LATEST" | cut -d. -f2)
-          PATCH=$(echo "$LATEST" | cut -d. -f3)
-          NEW_PATCH=$((PATCH + 1))
-          NEW_TAG="${MAJOR}.${MINOR}.${NEW_PATCH}"
-          echo "Creating release $NEW_TAG (previous: $LATEST)"
-          gh release create "$NEW_TAG" --generate-notes --title "$NEW_TAG"
-        env:
-          GH_TOKEN: ${{ github.token }}
+          echo "Will deploy ${{ inputs.app_name }} to ${{ inputs.environment }} on ${{ secrets.DEPLOY_HOST }}"
+          echo "Dockerfile: ${{ inputs.dockerfile_path }}"
