@@ -59,10 +59,6 @@ permissions:
   contents: write
   pull-requests: write
 
-concurrency:
-  group: deploy-${{ inputs.app_name }}-${{ inputs.environment }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'main' }}
-  cancel-in-progress: true
-
 env:
   SSH_CMD: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no
 
