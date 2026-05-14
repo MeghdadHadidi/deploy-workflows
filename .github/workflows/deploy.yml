@@ -92,8 +92,8 @@ jobs:
           DOMAIN="${{ inputs.domain }}"
           ENV="${{ inputs.environment }}"
 
-          if [ "${{ github.event_name }}" = "push" ]; then
-            # Push deployment (production or dev)
+          if [ "${{ github.event_name }}" = "push" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Push or manual deployment (production or dev)
             if [ "$ENV" = "dev" ]; then
               echo "environment=dev" >> $GITHUB_OUTPUT
               echo "container_name=${APP}-dev" >> $GITHUB_OUTPUT
